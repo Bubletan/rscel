@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 import rscel.codec.Encoder;
-import rscel.deps.bzip2alt.CBZip2OutputStream;
+import rscel.deps.bzip2.CBZip2OutputStream;
 
 public final class BZip2Encoder implements Encoder<byte[]> {
 	

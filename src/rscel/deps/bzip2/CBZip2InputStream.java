@@ -223,7 +223,7 @@ public class CBZip2InputStream extends InputStream implements BZip2Constants {
     }
 
     private void init() throws IOException {
-        int magic2 = this.in.read();
+        /*int magic2 = this.in.read();
         if (magic2 != 'h') {
             throw new IOException("Stream is not BZip2 formatted: expected 'h'"
                                   + " as first byte but got '" + (char) magic2
@@ -236,7 +236,8 @@ public class CBZip2InputStream extends InputStream implements BZip2Constants {
                                   + "blocksize " + (char) blockSize);
         }
 
-        this.blockSize100k = blockSize - '0';
+        this.blockSize100k = blockSize - '0';*/
+    	this.blockSize100k = 1;
 
         initBlock();
         setupBlock();

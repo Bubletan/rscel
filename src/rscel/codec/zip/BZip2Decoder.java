@@ -12,14 +12,7 @@ public final class BZip2Decoder implements Decoder<byte[]> {
 	@Override
 	public byte[] decode(byte[] data) {
 		try {
-			CBZip2InputStream cbz2is = new CBZip2InputStream(new ByteArrayInputStream(data) {
-				private int i;
-				
-				@Override
-				public int read() {
-					return i == 2 ? super.read() : i++ == 0 ? 'h' : '1';
-				}
-			});
+			CBZip2InputStream cbz2is = new CBZip2InputStream(new ByteArrayInputStream(data));
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			byte[] buf = new byte[256];
 			int len;
