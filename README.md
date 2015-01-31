@@ -38,5 +38,6 @@ fs.writeFileInBackground(123, data);
 
 ## Downloads
 
+* [rscel-2.1.0.jar @ MediaFire](http://www.mediafire.com/download/a8ucepckowtfeer/rscel-2.1.0.jar)
 * [rscel-2.0.0.jar @ MediaFire](http://www.mediafire.com/download/6mgfokzl4odfgbd/rscel-2.0.0.jar)
 * [rscel-1.0.0.jar @ MediaFire](http://www.mediafire.com/download/x1qwu3klctzdkzs/rscel-1.0.0.jar)
