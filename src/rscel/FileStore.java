@@ -49,7 +49,7 @@ public final class FileStore {
 		this.buffer = buffer;
 	}
 	
-	public void readFileOnBackground(int id, Consumer<byte[]> listener) {
+	public void readFileInBackground(int id, Consumer<byte[]> listener) {
 		synchronized (entries) {
 			entries.add(new ReadEntry(this, id, listener));
 			if (!running) {
@@ -142,7 +142,7 @@ public final class FileStore {
 		return buf;
 	}
 	
-	public void writeFileOnBackground(int id, byte[] data) {
+	public void writeFileInBackground(int id, byte[] data) {
 		synchronized (entries) {
 			entries.add(new WriteEntry(this, id, data));
 			if (!running) {

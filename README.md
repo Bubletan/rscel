@@ -10,15 +10,15 @@ Accessing a cache:
 String dir = System.getProperty("user.home") + ".myCache/";
 Cache cache = new Cache(dir);
 ```
-	
+
 Using a file store:
 
 ```java
 FileStore fs = cache.getFileStore(Cache.MODEL_FILE_STORE);
-byte[] data = fs.readGZipFile(123);
-fs.writeGZipFile(123, data);
+byte[] data = fs.readFile(123);
+fs.writeFile(123, data);
 ```
-	
+
 Using a file system:
 
 ```java
@@ -27,6 +27,16 @@ byte[] data = fs.readFile("flo.dat");
 fs.writeFile("flo.dat", data);
 ```
 
+Using background IO with file stores:
+
+```java
+fs.readFileInBackground(123, data -> {
+    // do something with data
+});
+fs.writeFileInBackground(123, data);
+```
+
 ## Downloads
 
+* [rscel-2.0.0.jar @ MediaFire](http://www.mediafire.com/download/6mgfokzl4odfgbd/rscel-2.0.0.jar)
 * [rscel-1.0.0.jar @ MediaFire](http://www.mediafire.com/download/x1qwu3klctzdkzs/rscel-1.0.0.jar)
