@@ -2,32 +2,78 @@ package rscel;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.util.LinkedList;
+import java.util.Queue;
+import java.util.function.Consumer;
 
 import rscel.util.ZipUtils;
 
 public final class FileStore {
 	
-	private static final byte[] buffer = new byte[520];
+	private static final Queue<Object> entries = new LinkedList<>();
+	private static final Thread thread = new Thread(() -> {
+		do {
+			Object obj;
+			synchronized (entries) {
+				if (entries.isEmpty()) {
+					running = false;
+					break;
+				}
+				obj = entries.remove();
+			}
+			if (obj instanceof ReadEntry) {
+				ReadEntry e = (ReadEntry) obj;
+				e.listener.accept(e.store.readFile(e.id));
+			} else {
+				WriteEntry e = (WriteEntry) obj;
+				e.store.writeFile(e.id, e.data);
+			}
+		} while (true);
+	});
+	static {
+		thread.setPriority(2);
+	}
+	private static boolean running;
 	
 	private final int id;
 	private final RandomAccessFile dat;
 	private final RandomAccessFile idx;
+	private final boolean gzip;
+	private final byte[] buffer;
 	
-	protected FileStore(int id, RandomAccessFile dat, RandomAccessFile idx) {
+	protected FileStore(int id, RandomAccessFile dat, RandomAccessFile idx, boolean gzip, byte[] buffer) {
 		this.id = id + 1;
 		this.dat = dat;
 		this.idx = idx;
+		this.gzip = gzip;
+		this.buffer = buffer;
 	}
 	
-	public byte[] readGZipFile(int id) {
-		byte[] data = readFile(id);
-		if (data == null) {
-			return null;
+	public void readFileOnBackground(int id, Consumer<byte[]> listener) {
+		synchronized (entries) {
+			entries.add(new ReadEntry(this, id, listener));
+			if (!running) {
+				running = true;
+				thread.start();
+			}
 		}
-		return ZipUtils.ungzip(data);
 	}
 	
-	public synchronized byte[] readFile(int id) {
+	private static final class ReadEntry {
+		
+		private final FileStore store;
+		private final int id;
+		private final Consumer<byte[]> listener;
+		
+		private ReadEntry(FileStore store, int id, Consumer<byte[]> listener) {
+			this.store = store;
+			this.id = id;
+			this.listener = listener;
+		}
+	}
+	
+	public byte[] readFile(int id) {
+		byte[] buf;
 		synchronized (buffer) {
 			try {
 				seek(idx, id * 6);
@@ -48,7 +94,7 @@ public final class FileStore {
 				if (frag <= 0 || frag > dat.length() / 520L) {
 					return null;
 				}
-				byte[] buf = new byte[fileSize];
+				buf = new byte[fileSize];
 				int nRead = 0;
 				int fragCount = 0;
 				while (nRead < fileSize) {
@@ -63,8 +109,7 @@ public final class FileStore {
 					}
 					int fileId;
 					for (; size < nToRead + 8; size += fileId) {
-						fileId = dat
-								.read(buffer, size, nToRead + 8 - size);
+						fileId = dat.read(buffer, size, nToRead + 8 - size);
 						if (fileId == -1) {
 							return null;
 						}
@@ -87,153 +132,168 @@ public final class FileStore {
 					frag = nextFrag;
 					fragCount++;
 				}
-				return buf;
 			} catch (IOException e) {
 				return null;
 			}
 		}
+		if (gzip) {
+			buf = ZipUtils.ungzip(buf);
+		}
+		return buf;
 	}
 	
-	public boolean writeGZipFile(int id, byte[] data) {
-		if (data == null) {
-			throw new IllegalArgumentException("data == null");
+	public void writeFileOnBackground(int id, byte[] data) {
+		synchronized (entries) {
+			entries.add(new WriteEntry(this, id, data));
+			if (!running) {
+				running = true;
+				thread.start();
+			}
 		}
-		data = ZipUtils.gzip(data);
-		return writeFile(id, data, data.length);
+	}
+	
+	private static final class WriteEntry {
+		
+		private final FileStore store;
+		private final int id;
+		private final byte[] data;
+		
+		private WriteEntry(FileStore store, int id, byte[] data) {
+			this.store = store;
+			this.id = id;
+			this.data = data;
+		}
 	}
 	
 	public boolean writeFile(int id, byte[] data) {
 		if (data == null) {
 			throw new IllegalArgumentException("data == null");
 		}
+		if (gzip) {
+			data = ZipUtils.gzip(data);
+		}
 		return writeFile(id, data, data.length);
 	}
 	
-	private synchronized boolean writeFile(int id, byte[] buf, int len) {
-		boolean success = writeFile(id, buf, len, true);
-		if (!success) {
-			success = writeFile(id, buf, len, false);
+	private boolean writeFile(int id, byte[] buf, int len) {
+		synchronized (buffer) {
+			boolean success = writeFile(id, buf, len, true);
+			if (!success) {
+				success = writeFile(id, buf, len, false);
+			}
+			return success;
 		}
-		return success;
 	}
 	
-	private synchronized boolean writeFile(int id, byte[] buf, int len,
-			boolean first) {
-		synchronized (buffer) {
-			try {
-				int sector;
+	private boolean writeFile(int id, byte[] buf, int len, boolean first) {
+		try {
+			int sector;
+			if (first) {
+				seek(idx, id * 6);
+				int size;
+				for (int i = 0; i < 6; i += size) {
+					size = idx.read(buffer, i, 6 - i);
+					if (size == -1) {
+						return false;
+					}
+				}
+				sector = ((buffer[3] & 0xff) << 16) + ((buffer[4] & 0xff) << 8)
+						+ (buffer[5] & 0xff);
+				if (sector <= 0 || sector > dat.length() / 520L) {
+					return false;
+				}
+			} else {
+				sector = (int) ((dat.length() + 519L) / 520L);
+				if (sector == 0) {
+					sector = 1;
+				}
+			}
+			buffer[0] = (byte) (len >> 16);
+			buffer[1] = (byte) (len >> 8);
+			buffer[2] = (byte) len;
+			buffer[3] = (byte) (sector >> 16);
+			buffer[4] = (byte) (sector >> 8);
+			buffer[5] = (byte) sector;
+			seek(idx, id * 6);
+			idx.write(buffer, 0, 6);
+			int written = 0;
+			for (int zero = 0; written < len; zero++) {
+				int nextSector = 0;
 				if (first) {
-					seek(idx, id * 6);
-					int size;
-					for (int i = 0; i < 6; i += size) {
-						size = idx.read(buffer, i, 6 - i);
-						if (size == -1) {
+					seek(dat, sector * 520);
+					int currentFile;
+					int idx;
+					for (idx = 0; idx < 8; idx += currentFile) {
+						currentFile = dat.read(buffer, idx, 8 - idx);
+						if (currentFile == -1) {
+							break;
+						}
+					}
+					if (idx == 8) {
+						currentFile = ((buffer[0] & 0xff) << 8)
+								+ (buffer[1] & 0xff);
+						int currentPart = ((buffer[2] & 0xff) << 8)
+								+ (buffer[3] & 0xff);
+						nextSector = ((buffer[4] & 0xff) << 16)
+								+ ((buffer[5] & 0xff) << 8)
+								+ (buffer[6] & 0xff);
+						int currentCache = buffer[7] & 0xff;
+						if (currentFile != id || currentPart != zero
+								|| currentCache != this.id) {
+							return false;
+						}
+						if (nextSector < 0 || nextSector > dat.length() / 520L) {
 							return false;
 						}
 					}
-					sector = ((buffer[3] & 0xff) << 16)
-							+ ((buffer[4] & 0xff) << 8) + (buffer[5] & 0xff);
-					if (sector <= 0 || sector > dat.length() / 520L) {
-						return false;
-					}
-				} else {
-					sector = (int) ((dat.length() + 519L) / 520L);
-					if (sector == 0) {
-						sector = 1;
-					}
 				}
-				buffer[0] = (byte) (len >> 16);
-				buffer[1] = (byte) (len >> 8);
-				buffer[2] = (byte) len;
-				buffer[3] = (byte) (sector >> 16);
-				buffer[4] = (byte) (sector >> 8);
-				buffer[5] = (byte) sector;
-				seek(idx, id * 6);
-				idx.write(buffer, 0, 6);
-				int written = 0;
-				for (int zero = 0; written < len; zero++) {
-					int nextSector = 0;
-					if (first) {
-						seek(dat, sector * 520);
-						int currentFile;
-						int idx;
-						for (idx = 0; idx < 8; idx += currentFile) {
-							currentFile = dat.read(buffer, idx, 8 - idx);
-							if (currentFile == -1) {
-								break;
-							}
-						}
-						if (idx == 8) {
-							currentFile = ((buffer[0] & 0xff) << 8)
-									+ (buffer[1] & 0xff);
-							int currentPart = ((buffer[2] & 0xff) << 8)
-									+ (buffer[3] & 0xff);
-							nextSector = ((buffer[4] & 0xff) << 16)
-									+ ((buffer[5] & 0xff) << 8)
-									+ (buffer[6] & 0xff);
-							int currentCache = buffer[7] & 0xff;
-							if (currentFile != id || currentPart != zero
-									|| currentCache != this.id) {
-								return false;
-							}
-							if (nextSector < 0
-									|| nextSector > dat.length() / 520L) {
-								return false;
-							}
-						}
-					}
+				if (nextSector == 0) {
+					first = false;
+					nextSector = (int) ((dat.length() + 519L) / 520L);
 					if (nextSector == 0) {
-						first = false;
-						nextSector = (int) ((dat.length() + 519L) / 520L);
-						if (nextSector == 0) {
-							nextSector++;
-						}
-						if (nextSector == sector) {
-							nextSector++;
-						}
+						nextSector++;
 					}
-					if (len - written <= 512) {
-						nextSector = 0;
+					if (nextSector == sector) {
+						nextSector++;
 					}
-					buffer[0] = (byte) (id >> 8);
-					buffer[1] = (byte) id;
-					buffer[2] = (byte) (zero >> 8);
-					buffer[3] = (byte) zero;
-					buffer[4] = (byte) (nextSector >> 16);
-					buffer[5] = (byte) (nextSector >> 8);
-					buffer[6] = (byte) nextSector;
-					buffer[7] = (byte) this.id;
-					seek(dat, sector * 520);
-					dat.write(buffer, 0, 8);
-					int remaining = len - written;
-					if (remaining > 512) {
-						remaining = 512;
-					}
-					dat.write(buf, written, remaining);
-					written += remaining;
-					sector = nextSector;
 				}
-				return true;
-			} catch (IOException e) {
-				return false;
+				if (len - written <= 512) {
+					nextSector = 0;
+				}
+				buffer[0] = (byte) (id >> 8);
+				buffer[1] = (byte) id;
+				buffer[2] = (byte) (zero >> 8);
+				buffer[3] = (byte) zero;
+				buffer[4] = (byte) (nextSector >> 16);
+				buffer[5] = (byte) (nextSector >> 8);
+				buffer[6] = (byte) nextSector;
+				buffer[7] = (byte) this.id;
+				seek(dat, sector * 520);
+				dat.write(buffer, 0, 8);
+				int remaining = len - written;
+				if (remaining > 512) {
+					remaining = 512;
+				}
+				dat.write(buf, written, remaining);
+				written += remaining;
+				sector = nextSector;
 			}
+			return true;
+		} catch (IOException e) {
+			return false;
 		}
 	}
 	
-	private synchronized void seek(RandomAccessFile file, int pos)
-			throws IOException {
-		synchronized (buffer) {
-			if (pos < 0 || pos > 62914560) {
-				System.err.println("Badseek - pos:" + pos + " len:"
-						+ file.length());
-				pos = 62914560;
-				try {
-					Thread.sleep(1000L);
-				} catch (Exception e) {
-				}
+	private void seek(RandomAccessFile file, int pos) throws IOException {
+		if (pos < 0 || pos > 62914560) {
+			System.err.println("bad seek: pos=" + pos + " len=" + file.length());
+			pos = 62914560;
+			try {
+				Thread.sleep(1000L);
+			} catch (Exception e) {
 			}
-			file.seek(pos);
 		}
+		file.seek(pos);
 	}
 	
 	public int getFileCount() {

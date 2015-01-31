@@ -35,6 +35,8 @@ public final class Cache {
 	private final Map<Integer, FileStore> stores = new HashMap<>();
 	private final Map<Integer, FileSystem> systems = new HashMap<>();
 	
+	private final byte[] buffer = new byte[520];
+	
 	public Cache(String dir) {
 		dir = formatDir(dir);
 		File dirf = new File(dir);
@@ -72,7 +74,7 @@ public final class Cache {
 			}
 			try {
 				RandomAccessFile idx = new RandomAccessFile(path, "rw");
-				fs = new FileStore(id, dat, idx);
+				fs = new FileStore(id, dat, idx, id != FS_FILE_STORE, buffer);
 				stores.put(id, fs);
 				return fs;
 			} catch (FileNotFoundException e) {
@@ -101,7 +103,7 @@ public final class Cache {
 			String path = idxPath(dir, id);
 			try {
 				RandomAccessFile idx = new RandomAccessFile(path, "rw");
-				FileStore fs = new FileStore(id, dat, idx);
+				FileStore fs = new FileStore(id, dat, idx, id != FS_FILE_STORE, buffer);
 				stores.put(id, fs);
 				return fs;
 			} catch (FileNotFoundException e) {
@@ -126,7 +128,7 @@ public final class Cache {
 			String path = idxPath(dir, id);
 			try {
 				RandomAccessFile idx = new RandomAccessFile(path, "rw");
-				fs = new FileStore(id, dat, idx);
+				fs = new FileStore(id, dat, idx, id != FS_FILE_STORE, buffer);
 				stores.put(id, fs);
 				return fs;
 			} catch (FileNotFoundException e) {
