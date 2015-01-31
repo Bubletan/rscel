@@ -157,7 +157,11 @@ public final class Cache {
 				return fs;
 			}
 			FileStore store = getOrCreateFileStore(FS_FILE_STORE);
-			byte[] data = store.readFile(id);
+			byte[] data = null;
+			try {
+				data = store.readFile(id);
+			} catch (Exception e) {
+			}
 			if (data == null) {
 				throw new IllegalStateException("file system does not exist");
 			}
@@ -173,7 +177,11 @@ public final class Cache {
 				throw new IllegalStateException("file system already exists");
 			}
 			FileStore store = getOrCreateFileStore(FS_FILE_STORE);
-			byte[] data = store.readFile(id);
+			byte[] data = null;
+			try {
+				data = store.readFile(id);
+			} catch (Exception e) {
+			}
 			if (data != null) {
 				FileSystem fs = new FileSystem(id, store, data);
 				systems.put(id, fs);
@@ -198,7 +206,11 @@ public final class Cache {
 				return fs;
 			}
 			FileStore store = getOrCreateFileStore(FS_FILE_STORE);
-			byte[] data = store.readFile(id);
+			byte[] data = null;
+			try {
+				data = store.readFile(id);
+			} catch (Exception e) {
+			}
 			if (data == null) {
 				data = emptyFileSystemData();
 				store.writeFile(id, data);

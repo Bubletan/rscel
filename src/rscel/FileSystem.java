@@ -62,7 +62,7 @@ public final class FileSystem {
 		}
 	}
 	
-	private synchronized boolean repack() {
+	private synchronized void repack() {
 		
 		int size = 2 + files.size() * 10;
 		for (File file : files) {
@@ -106,14 +106,14 @@ public final class FileSystem {
 			data = buf.getData();
 		}
 		
-		return fs.writeFile(id, data);
+		fs.writeFileInBackground(id, data);
 	}
 	
-	public boolean writeFile(String name, byte[] data) {
-		return writeFile(FileSystemUtils.fileNameToHash(name), data);
+	public void writeFile(String name, byte[] data) {
+		writeFile(FileSystemUtils.fileNameToHash(name), data);
 	}
 	
-	public synchronized boolean writeFile(int hash, byte[] data) {
+	public synchronized void writeFile(int hash, byte[] data) {
 		File file = null;
 		for (File f : files) {
 			if (f.hash == hash) {
@@ -132,7 +132,7 @@ public final class FileSystem {
 		}
 		file.onDiskSize = data.length;
 		file.data = data;
-		return repack();
+		repack();
 	}
 	
 	public byte[] readFile(String name) {
@@ -155,16 +155,17 @@ public final class FileSystem {
 		throw new RuntimeException("file not found");
 	}
 	
-	public boolean removeFile(String name) {
-		return removeFile(FileSystemUtils.fileNameToHash(name));
+	public void removeFile(String name) {
+		removeFile(FileSystemUtils.fileNameToHash(name));
 	}
 	
-	public synchronized boolean removeFile(int hash) {
+	public synchronized void removeFile(int hash) {
 		for (Iterator<File> i = files.iterator(); i.hasNext();) {
 			File file = i.next();
 			if (file.hash == hash) {
 				i.remove();
-				return repack();
+				repack();
+				return;
 			}
 		}
 		throw new RuntimeException("file not found");

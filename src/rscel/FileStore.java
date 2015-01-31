@@ -10,30 +10,59 @@ import rscel.util.ZipUtils;
 
 public final class FileStore {
 	
-	private static final Queue<Object> entries = new LinkedList<>();
-	private static final Thread thread = new Thread(() -> {
-		do {
-			Object obj;
-			synchronized (entries) {
-				if (entries.isEmpty()) {
-					running = false;
-					break;
-				}
-				obj = entries.remove();
-			}
-			if (obj instanceof ReadEntry) {
-				ReadEntry e = (ReadEntry) obj;
-				e.listener.accept(e.store.readFile(e.id));
-			} else {
-				WriteEntry e = (WriteEntry) obj;
-				e.store.writeFile(e.id, e.data);
-			}
-		} while (true);
-	});
-	static {
-		thread.setPriority(2);
-	}
+	private static final Object lock = new Object();
+	private static final Queue<ReadEntry> readEntries = new LinkedList<>();
+	private static final Queue<WriteEntry> writeEntries = new LinkedList<>();
 	private static boolean running;
+	private static volatile boolean exiting;
+	private static Thread thread;
+	static {
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			exiting = true;
+			synchronized (lock) {
+				if (running) {
+					try {
+						thread.join();
+					} catch (Exception e) {
+					}
+				}
+			}
+		}));
+	}
+	private static void runBackgroundThread() {
+		synchronized (lock) {
+			if (!running) {
+				running = true;
+				thread = new Thread(() -> {
+					do {
+						ReadEntry readEntry = null;
+						WriteEntry writeEntry = null;
+						synchronized (lock) {
+							if ((exiting || readEntries.isEmpty()) && writeEntries.isEmpty()) {
+								running = false;
+								break;
+							}
+							if (!exiting && !readEntries.isEmpty()) {
+								readEntry = readEntries.remove();
+							} else {
+								writeEntry = writeEntries.remove();
+							}
+						}
+						if (readEntry != null) {
+							byte[] data = readEntry.store.readFile(readEntry.id);
+							if (!exiting) {
+								readEntry.listener.accept(data);
+							}
+						} else {
+							writeEntry.store.writeFile(writeEntry.id, writeEntry.data);
+						}
+					} while (true);
+				});
+				thread.setPriority(Thread.MIN_PRIORITY);
+				thread.start();
+			}
+		}
+	}
 	
 	private final int id;
 	private final RandomAccessFile dat;
@@ -50,12 +79,9 @@ public final class FileStore {
 	}
 	
 	public void readFileInBackground(int id, Consumer<byte[]> listener) {
-		synchronized (entries) {
-			entries.add(new ReadEntry(this, id, listener));
-			if (!running) {
-				running = true;
-				thread.start();
-			}
+		synchronized (lock) {
+			readEntries.add(new ReadEntry(this, id, listener));
+			runBackgroundThread();
 		}
 	}
 	
@@ -81,7 +107,7 @@ public final class FileStore {
 				for (int i = 0; i < 6; i += fileSize) {
 					fileSize = idx.read(buffer, i, 6 - i);
 					if (fileSize == -1) {
-						return null;
+						throw new RuntimeException("file does not exist: " + id);
 					}
 				}
 				fileSize = ((buffer[0] & 0xff) << 16)
@@ -89,17 +115,17 @@ public final class FileStore {
 				int frag = ((buffer[3] & 0xff) << 16)
 						+ ((buffer[4] & 0xff) << 8) + (buffer[5] & 0xff);
 				if (fileSize < 0) {
-					return null;
+					throw new RuntimeException("negative file size: " + id);
 				}
 				if (frag <= 0 || frag > dat.length() / 520L) {
-					return null;
+					throw new RuntimeException("fragment pointer out of bounds");
 				}
 				buf = new byte[fileSize];
 				int nRead = 0;
 				int fragCount = 0;
 				while (nRead < fileSize) {
 					if (frag == 0) {
-						return null;
+						throw new RuntimeException("null fragment pointer");
 					}
 					seek(dat, frag * 520);
 					int size = 0;
@@ -111,7 +137,7 @@ public final class FileStore {
 					for (; size < nToRead + 8; size += fileId) {
 						fileId = dat.read(buffer, size, nToRead + 8 - size);
 						if (fileId == -1) {
-							return null;
+							throw new RuntimeException("out of data file bounds");
 						}
 					}
 					fileId = ((buffer[0] & 0xff) << 8) + (buffer[1] & 0xff);
@@ -121,10 +147,10 @@ public final class FileStore {
 					int nextStoreId = buffer[7] & 0xff;
 					if (fileId != id || fragId != fragCount
 							|| nextStoreId != this.id) {
-						return null;
+						throw new RuntimeException("fragment header mismatch");
 					}
 					if (nextFrag < 0 || nextFrag > dat.length() / 520L) {
-						return null;
+						throw new RuntimeException("fragment pointer out of bounds");
 					}
 					for (int i = 0; i < nToRead; i++) {
 						buf[nRead++] = buffer[i + 8];
@@ -133,7 +159,7 @@ public final class FileStore {
 					fragCount++;
 				}
 			} catch (IOException e) {
-				return null;
+				throw new RuntimeException("io error occurred");
 			}
 		}
 		if (gzip) {
@@ -143,12 +169,9 @@ public final class FileStore {
 	}
 	
 	public void writeFileInBackground(int id, byte[] data) {
-		synchronized (entries) {
-			entries.add(new WriteEntry(this, id, data));
-			if (!running) {
-				running = true;
-				thread.start();
-			}
+		synchronized (lock) {
+			writeEntries.add(new WriteEntry(this, id, data));
+			runBackgroundThread();
 		}
 	}
 	
@@ -165,23 +188,25 @@ public final class FileStore {
 		}
 	}
 	
-	public boolean writeFile(int id, byte[] data) {
+	public void writeFile(int id, byte[] data) {
 		if (data == null) {
 			throw new IllegalArgumentException("data == null");
 		}
 		if (gzip) {
 			data = ZipUtils.gzip(data);
 		}
-		return writeFile(id, data, data.length);
+		writeFile(id, data, data.length);
 	}
 	
-	private boolean writeFile(int id, byte[] buf, int len) {
+	private void writeFile(int id, byte[] buf, int len) {
 		synchronized (buffer) {
 			boolean success = writeFile(id, buf, len, true);
 			if (!success) {
 				success = writeFile(id, buf, len, false);
 			}
-			return success;
+			if (!success) {
+				throw new RuntimeException("error writing file");
+			}
 		}
 	}
 	
@@ -280,7 +305,7 @@ public final class FileStore {
 			}
 			return true;
 		} catch (IOException e) {
-			return false;
+			throw new RuntimeException("io error occurred");
 		}
 	}
 	
